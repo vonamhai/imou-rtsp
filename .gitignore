@@ -1,0 +1,7 @@
+# Runtime data: config.json / devices-*.json contain the Imou accounts and camera passwords.
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/

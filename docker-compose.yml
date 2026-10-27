@@ -1,0 +1,43 @@
+# Imou → RTSP cho Synology Container Manager. Hướng dẫn: README.md.
+# Dán toàn bộ file này vào Container Manager → Project → Create → "Create docker-compose.yml",
+# rồi đổi WEB_PASSWORD, RTSP_USERNAME và RTSP_PASSWORD bên dưới.
+services:
+  imou-rtsp:
+    image: ghcr.io/vonamhai/imou-rtsp:latest
+    # Muốn tự build từ mã nguồn thay vì tải image: bỏ dấu # ở dòng dưới (cần đủ thư mục mã nguồn).
+    # build: .
+    container_name: imou-rtsp
+    restart: unless-stopped
+    # Mạng host: cần cho dò camera trong LAN (UDP broadcast), RTSP qua UDP và P2P.
+    network_mode: host
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      # Mật khẩu giao diện web (tên đăng nhập mặc định: admin). Hãy đổi!
+      # Nên chỉ dùng chữ và số: ký tự $ bị Docker Compose hiểu là biến.
+      WEB_PASSWORD: "DOI_MAT_KHAU_WEB"
+      # Tài khoản xem link RTSP: đặt cả hai, hoặc để trống cả hai ("") thì mọi máy trong LAN đều xem được.
+      # Nên chỉ dùng chữ và số: @ : / làm hỏng link dạng rtsp://tên:mật-khẩu@IP-NAS:8554/...
+      RTSP_USERNAME: "xem"
+      RTSP_PASSWORD: "DOI_MAT_KHAU_RTSP"
+      # Cổng dịch vụ (đổi nếu trùng ứng dụng khác trên NAS, ví dụ Frigate/go2rtc cũng dùng 8554).
+      WEB_PORT: "8090"
+      RTSP_PORT: "8554"
+      RTP_PORT: "8000"
+      RTCP_PORT: "8001"
+      # PUBLIC_HOST: "192.168.1.10"   # IP/tên miền hiển thị trong link RTSP
+      # RTSP_TRANSPORTS: "udp,tcp"    # giao thức cho người xem: udp, multicast, tcp
+      # LAN_SCAN_INTERVAL: "900"      # giây giữa hai lần dò camera trong LAN; 0 = tắt
+      # REFRESH_INTERVAL: "600"       # giây giữa hai lần làm mới danh sách thiết bị Imou
+      # ENABLE_HLS: "true"            # thêm http://NAS:8888/<path>/ (HLS)
+      # ENABLE_WEBRTC: "true"         # thêm http://NAS:8889/<path>/ (WebRTC)
+      # LOG_LEVEL: "info"             # debug | info | warn | error
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

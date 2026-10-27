@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Imou → RTSP</title>
+<link rel="stylesheet" href="static/style.css">
+<script src="static/app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>Imou → RTSP</h1>
+    <span id="version" class="muted small"></span>
+  </div>
+  <div class="chips">
+    <span id="chip-cloud" class="chip">Imou: …</span>
+    <span id="chip-mtx" class="chip">Máy chủ RTSP: …</span>
+  </div>
+</header>
+
+<main>
+  <div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
+
+  <section class="card" id="account">
+    <div class="section-head">
+      <h2>Tài khoản Imou</h2>
+      <div class="actions">
+        <button id="btn-add-account" type="button" class="secondary" hidden>Thêm tài khoản</button>
+      </div>
+    </div>
+
+    <div id="accounts"></div>
+
+    <form id="login-form" autocomplete="on" hidden>
+      <h3 id="login-title">Thêm tài khoản Imou</h3>
+      <p id="login-intro" class="muted">Đăng nhập bằng tài khoản ứng dụng <strong>Imou Life</strong> (email hoặc số điện thoại) để lấy danh sách camera. Có thể gắn nhiều tài khoản.</p>
+      <div class="grid">
+        <label>Tài khoản
+          <input id="login-account" name="username" autocomplete="username" required>
+        </label>
+        <label>Mật khẩu
+          <input id="login-password" name="password" type="password" autocomplete="current-password">
+        </label>
+      </div>
+      <p id="login-hint" class="muted small" hidden>Để trống mật khẩu để dùng mật khẩu đã lưu.</p>
+      <div class="actions">
+        <button type="submit" id="btn-login">Đăng nhập</button>
+        <button type="button" id="btn-login-close" class="secondary" hidden>Hủy</button>
+      </div>
+    </form>
+
+    <div id="captcha-step" hidden>
+      <p>Imou yêu cầu xác minh CAPTCHA trước khi đăng nhập <strong class="login-label"></strong>.</p>
+      <div class="actions">
+        <a class="button" href="captcha" id="captcha-link">Mở trang CAPTCHA</a>
+        <button type="button" class="secondary" data-action="cancel-login">Hủy</button>
+      </div>
+    </div>
+
+    <form id="otp-form" hidden>
+      <p>Imou đã gửi mã xác minh 6 số cho <strong class="login-label"></strong> qua <strong id="otp-delivery"></strong>.</p>
+      <div class="grid">
+        <label>Mã xác minh
+          <input id="otp-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit" id="btn-otp">Xác minh</button>
+        <button type="button" id="btn-resend" class="secondary">Gửi lại mã</button>
+        <button type="button" class="secondary" data-action="cancel-login">Hủy</button>
+      </div>
+    </form>
+
+    <p id="login-busy" class="muted" hidden><span class="spinner"></span> <span id="login-busy-text">Đang làm việc với Imou, có thể mất tới 30 giây…</span></p>
+    <p id="login-error" class="error" hidden></p>
+    <p id="login-info" class="okay" hidden></p>
+  </section>
+
+  <section class="card">
+    <div class="section-head">
+      <h2>Camera và link RTSP</h2>
+      <div class="actions">
+        <button id="btn-discover" type="button" class="secondary">Quét LAN</button>
+      </div>
+    </div>
+    <p id="rtsp-info" class="muted"></p>
+    <p id="discovery-info" class="muted small"></p>
+    <p id="streams-error" class="error" hidden></p>
+    <div id="cameras"></div>
+    <p id="no-cameras" class="muted" hidden>Chưa có camera. Đăng nhập Imou để tải danh sách thiết bị.</p>
+  </section>
+
+  <section class="card">
+    <details id="logs-panel">
+      <summary>Nhật ký hoạt động</summary>
+      <div class="actions">
+        <button type="button" id="btn-logs" class="secondary">Tải lại</button>
+      </div>
+      <pre id="logs"></pre>
+    </details>
+  </section>
+</main>
+
+<template id="account-template">
+  <div class="account-row">
+    <div class="account-main">
+      <p class="acct-line"><strong class="acct-label"></strong> <span class="badge acct-status"></span></p>
+      <p class="acct-detail muted small"></p>
+    </div>
+    <div class="actions">
+      <button type="button" class="secondary acct-refresh">Làm mới danh sách</button>
+      <button type="button" class="secondary acct-relogin">Đăng nhập lại</button>
+      <button type="button" class="danger acct-remove">Gỡ tài khoản</button>
+    </div>
+  </div>
+</template>
+
+<template id="camera-template">
+  <article class="camera">
+    <div class="camera-head">
+      <div>
+        <h3 class="cam-name"></h3>
+        <p class="cam-meta muted small"></p>
+      </div>
+      <div class="cam-badges">
+        <span class="badge cam-online" hidden></span>
+        <span class="badge cam-mode"></span>
+      </div>
+    </div>
+    <p class="cam-disabled muted" hidden>Camera đang tắt – bật trong phần cấu hình để tạo link RTSP.</p>
+    <div class="streams"></div>
+    <div class="actions">
+      <button type="button" class="secondary cam-toggle">Cấu hình</button>
+      <button type="button" class="secondary cam-test">Kiểm tra luồng</button>
+    </div>
+    <div class="cam-test-result small" hidden></div>
+    <form class="cam-form" novalidate hidden>
+      <div class="grid">
+        <label class="check wide"><input type="checkbox" name="enabled"> Bật camera này (tạo link RTSP)</label>
+        <label>Tên đường dẫn RTSP
+          <input name="path" maxlength="64" autocomplete="off" spellcheck="false">
+        </label>
+        <label>Nguồn lấy hình
+          <select name="mode">
+            <option value="lan">LAN – RTSP trực tiếp từ camera (khuyên dùng)</option>
+            <option value="p2p">P2P qua máy chủ Imou (thử nghiệm)</option>
+            <option value="cloud">Link xem trực tiếp từ Imou cloud (thử nghiệm)</option>
+            <option value="custom">URL tùy chỉnh</option>
+          </select>
+        </label>
+        <label data-modes="lan">IP camera trong LAN
+          <input name="host" autocomplete="off" spellcheck="false" placeholder="Tự động">
+        </label>
+        <label data-modes="lan">Cổng RTSP của camera
+          <input name="port" type="number" min="1" max="65535">
+        </label>
+        <label class="check wide" data-modes="lan"><input type="checkbox" name="auto_host"> Tự cập nhật IP khi quét LAN</label>
+        <label data-modes="lan p2p">Tài khoản camera
+          <input name="username" autocomplete="off" spellcheck="false">
+        </label>
+        <label data-modes="lan p2p">Mật khẩu camera (Safety Code)
+          <input name="password" type="password" autocomplete="new-password">
+        </label>
+        <label class="check wide pw-clear" data-modes="lan p2p"><input type="checkbox" name="password_clear"> Xóa mật khẩu đã lưu</label>
+        <label data-modes="lan p2p">Kênh (0 = tự động)
+          <input name="channel" type="number" min="0" max="256">
+        </label>
+        <label data-modes="lan cloud custom">Kết nối RTSP tới camera bằng
+          <select name="rtsp_transport">
+            <option value="tcp">TCP (ổn định, khuyên dùng)</option>
+            <option value="udp">UDP</option>
+            <option value="automatic">Tự động</option>
+          </select>
+        </label>
+        <label class="wide" data-modes="custom">URL nguồn
+          <input name="custom_url" autocomplete="off" spellcheck="false" placeholder="rtsp://user:pass@192.168.1.10:554/cam/realmonitor?channel=1&amp;subtype=0">
+        </label>
+        <label class="check" data-modes="lan p2p cloud"><input type="checkbox" name="main"> Luồng chính (HD)</label>
+        <label class="check" data-modes="lan p2p cloud"><input type="checkbox" name="sub"> Luồng phụ (SD, thêm “_sub”)</label>
+        <label class="check wide"><input type="checkbox" name="on_demand"> Chỉ kết nối tới camera khi có người xem</label>
+      </div>
+      <p class="form-hints muted small"></p>
+      <p class="form-error error" hidden></p>
+      <div class="actions">
+        <button type="submit">Lưu</button>
+        <button type="button" class="secondary cam-cancel">Đóng</button>
+        <button type="button" class="danger cam-reset">Đặt lại mặc định</button>
+      </div>
+    </form>
+  </article>
+</template>
+
+<template id="stream-template">
+  <div class="stream">
+    <div class="stream-head">
+      <span class="kind"></span>
+      <span class="badge state"></span>
+      <span class="readers muted small"></span>
+    </div>
+    <div class="url-row">
+      <input class="url" readonly spellcheck="false" aria-label="Link RTSP">
+      <button type="button" class="secondary copy">Sao chép</button>
+    </div>
+    <p class="detail muted small"></p>
+    <p class="web-links small" hidden></p>
+  </div>
+</template>
+</body>
+</html>

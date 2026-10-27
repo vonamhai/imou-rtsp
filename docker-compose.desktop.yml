@@ -1,0 +1,18 @@
+# Chạy thử trên Docker Desktop (Windows/macOS). Docker Desktop không cho máy truy cập
+# container dùng network_mode: host, nên file này chuyển sang mạng bridge và mở cổng ra máy.
+#   docker compose -f docker-compose.yml -f docker-compose.desktop.yml up -d
+# (thêm --build nếu đã bỏ dấu # ở dòng "build: ." trong docker-compose.yml để chạy mã nguồn đang sửa)
+# Giao diện: http://localhost:8090 · link RTSP: rtsp://localhost:8554/<tên>
+# Ở chế độ này không dò được camera trong LAN; hãy nhập IP camera bằng tay.
+services:
+  imou-rtsp:
+    network_mode: bridge
+    restart: "no"
+    ports:
+      # Chỉ máy này truy cập được. Bỏ "127.0.0.1:" để máy khác trong LAN xem được,
+      # nhưng khi đó hãy đặt WEB_PASSWORD và RTSP_USERNAME/RTSP_PASSWORD.
+      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:8554:8554"
+    environment:
+      RTSP_TRANSPORTS: "tcp"
+      LAN_SCAN_INTERVAL: "0"
