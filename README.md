@@ -144,6 +144,7 @@ Container dùng `network_mode: host` vì dò camera trong LAN cần UDP broadcas
 | Hiện tượng | Cách xử lý |
 |---|---|
 | Tạo project báo `pull access denied`, `denied` hoặc `unauthorized` khi tải `ghcr.io/vonamhai/imou-rtsp` | NAS chưa ra được Internet (kiểm tra DNS/gateway của NAS), hoặc image chưa được đặt công khai trên GitHub (chủ repo vào **Package settings → Change visibility → Public**). |
+| Không mở được `http://IP-NAS:8090`, hoặc trình xem không kết nối được link RTSP | Kiểm tra container đang chạy (*Container Manager → Container*). Nếu đã bật tường lửa DSM (*Control Panel → Security → Firewall*), thêm quy tắc cho phép cổng TCP 8090, 8554 và UDP 8000–8001 (hoặc các cổng bạn đã đổi). |
 | Build báo `dockerfile parse error on line 1: unknown instruction:` (không có chữ nào sau dấu hai chấm) | Chỉ gặp khi tự build từ mã nguồn: file trên NAS bị chép hỏng, đúng tên và kích thước nhưng nội dung toàn byte 0. Hãy dùng image dựng sẵn như phần cài đặt, hoặc tải lại mã nguồn. |
 | Kiểm tra luồng báo `401` / `Unauthorized` | Sai Safety Code hoặc tài khoản camera. Tài khoản thường là `admin`. |
 | `i/o timeout`, `connection refused` | Sai IP camera, camera không cùng mạng với NAS, hoặc cổng RTSP 554 bị chặn. Thử mở link `rtsp://admin:<Safety Code>@IP-camera:554/cam/realmonitor?channel=1&subtype=0` bằng VLC. |
