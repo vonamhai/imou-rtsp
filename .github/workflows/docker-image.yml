@@ -65,6 +65,8 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=sha
+          labels: |
+            org.opencontainers.image.licenses=MIT
 
       - uses: docker/build-push-action@v7
         with:
