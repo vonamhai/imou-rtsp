@@ -115,9 +115,11 @@ def test_extract_stream_reports_the_key() -> None:
 
 
 class _LiveClient:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any], mode: str = "") -> None:
         self.payload = payload
+        self.mode = mode
         self.calls: list[dict[str, Any]] = []
+        self.rejected: list[tuple[Any, ...]] = []
 
     async def async_get_live_url(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
@@ -125,6 +127,12 @@ class _LiveClient:
 
     def live_diagnostic(self, *args: Any) -> str:
         return "test"
+
+    def live_mode(self, *args: Any) -> str:
+        return self.mode
+
+    def reject_live_mode(self, *args: Any) -> None:
+        self.rejected.append(args)
 
 
 async def test_live_stream_marks_tls_links_and_can_bypass_cache(tmp_path: Path) -> None:
@@ -143,6 +151,14 @@ async def test_live_stream_marks_tls_links_and_can_bypass_cache(tmp_path: Path) 
     stream = await cloud.live_stream(device, channel, sub=True, fresh=True)
     assert stream == CloudStream("rtsp://1.2.3.4:9133/x_1?digest=d", tls=True, key="tlsresource")
     assert client.calls[-1] == {"stream_id": "1", "use_cache": False}
+    assert stream.reject is None and stream.label == "tlsresource"
+
+    client.mode = "transfer"
+    stream = await cloud.live_stream(device, channel, sub=True, fresh=True)
+    assert stream.mode == "transfer" and stream.label == "transfer/tlsresource"
+    assert stream.reject is not None and "digest" not in repr(stream.reject)
+    stream.reject()
+    assert client.rejected == [("P1", "AAA111", "0", "1", "transfer")]
 
     client.payload = {"data": {"url": "https://cdn/live.m3u8?t=1"}}
     stream = await cloud.live_stream(device, channel, sub=False)
@@ -195,6 +211,7 @@ async def test_live_stream_prefers_the_owner_and_falls_back_to_a_share(tmp_path:
 
 async def test_front_rewrites_requests_and_fetches_a_new_link_per_client(monkeypatch: Any) -> None:
     monkeypatch.setattr(cloud_front, "_RETRY_PAUSE", 0.01)
+    monkeypatch.setattr(cloud_front, "_TLS_PROBE_TIMEOUT", 0.3)
     relay = FakeRelay()
     await relay.start()
 
@@ -259,8 +276,9 @@ async def test_front_rewrites_requests_and_fetches_a_new_link_per_client(monkeyp
         status, headers, _ = await _response(third_reader)
         assert status == 503 and headers["cseq"] == "1"
         assert await _closed(third_reader)
-        assert relay.requests.count(("OPTIONS", url)) == 4  # first session + three tries
-        assert "không trả lời" in front.last_error
+        # First session + three plain tries; one TLS try in between sends no RTSP.
+        assert relay.requests.count(("OPTIONS", url)) == 4
+        assert "không trả lời" in front.last_error and "closed without a reply" in front.last_error
     finally:
         for item in writers:
             item.close()
@@ -355,9 +373,10 @@ def test_front_answers_before_mediamtx_gives_up(tmp_path: Path) -> None:
     assert cloud_front._ANSWER_DEADLINE + cloud_front._MIN_ATTEMPT_WINDOW <= READ_TIMEOUT
 
 
-def _relay_fetch(relay: FakeRelay) -> Any:
+def _relay_fetch(relay: FakeRelay, *, tls: bool = False, rejected: list[str] | None = None) -> Any:
     async def fetch() -> CloudStream:
-        return CloudStream(relay.issue(), key="tlsresource")
+        reject = None if rejected is None else (lambda: rejected.append("transfer"))
+        return CloudStream(relay.issue(), tls=tls, key="tlsresource", mode="transfer", reject=reject)
 
     return fetch
 
@@ -389,20 +408,103 @@ async def test_front_replays_the_first_request_while_the_camera_wakes_up(
         await relay.close()
 
 
-async def test_front_retries_relays_that_hang_up_silently(monkeypatch: Any) -> None:
+async def test_front_retries_relays_that_hang_up_silently(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # TLS links that hang up (a waking camera) get new links, never a reject.
     monkeypatch.setattr(cloud_front, "_RETRY_PAUSE", 0.01)
-    relay = FakeRelay(asleep=2, wake_status=None)
+    relay = FakeRelay(expired_server_context(tmp_path), asleep=2, wake_status=None)
     await relay.start()
-    front = CloudFront("cam", _relay_fetch(relay))
+    rejected: list[str] = []
+    front = CloudFront("cam", _relay_fetch(relay, tls=True, rejected=rejected))
     port = await front.open()
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         assert (await _request(reader, writer, "DESCRIBE", front.local_url, 1))[0] == 200
         assert len(relay.issued) == 3 and front.sessions == 1
+        assert rejected == []
         writer.close()
     finally:
         await front.close()
         await relay.close()
+
+
+async def test_front_retries_plain_links_over_tls_and_remembers(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setattr(cloud_front, "_RETRY_PAUSE", 0.01)
+    relay = FakeRelay(expired_server_context(tmp_path))
+    await relay.start()
+    rejected: list[str] = []
+
+    async def fetch() -> CloudStream:
+        return CloudStream(
+            relay.issue(), key="url", mode="standard-rtsp", reject=lambda: rejected.append("x")
+        )
+
+    front = CloudFront("cam", fetch)
+    port = await front.open()
+    try:
+        for expected_links in (2, 3):  # the second client goes straight to TLS
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            status, headers, _ = await _request(reader, writer, "DESCRIBE", front.local_url, 1)
+            assert status == 200 and headers["content-base"] == relay.issued[-1]
+            assert len(relay.issued) == expected_links
+            writer.close()
+        assert front.sessions == 2 and rejected == []
+    finally:
+        await front.close()
+        await relay.close()
+
+
+async def test_front_sets_aside_link_types_that_never_answer(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setattr(cloud_front, "_RETRY_PAUSE", 0.01)
+
+    async def hang_up(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writer.close()
+
+    dead = await asyncio.start_server(hang_up, "127.0.0.1", 0)
+    dead_port = int(dead.sockets[0].getsockname()[1])
+    good = FakeRelay(expired_server_context(tmp_path))
+    await good.start()
+    rejected: list[str] = []
+
+    async def fetch() -> CloudStream:
+        if not rejected:
+            return CloudStream(
+                f"rtsp://127.0.0.1:{dead_port}/x?digest=d",
+                key="url",
+                mode="standard-rtsp",
+                reject=lambda: rejected.append("standard-rtsp"),
+            )
+        return CloudStream(good.issue(), tls=True, key="tlsresource", mode="transfer")
+
+    front = CloudFront("cam", fetch)
+    port = await front.open()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        status, headers, _ = await _request(reader, writer, "DESCRIBE", front.local_url, 1)
+        assert status == 200 and headers["content-base"] == good.issued[0]
+        assert rejected == ["standard-rtsp"] and front.sessions == 1
+        writer.close()
+    finally:
+        await front.close()
+        dead.close()
+        await good.close()
+
+
+def test_relay_failures_are_described_without_secrets() -> None:
+    def partial(data: bytes) -> asyncio.IncompleteReadError:
+        return asyncio.IncompleteReadError(data, None)
+
+    assert cloud_front.describe_error(partial(b"")) == "closed without a reply"
+    assert "expects TLS" in cloud_front.describe_error(partial(b"\x15\x03\x01\x00\x02\x02\x46"))
+    assert cloud_front.describe_reply(b"HTTP/1.1 400 Bad Request\r\n") == "HTTP reply 400"
+    assert cloud_front.describe_reply(b"\x00\x01secret-token") == "14 unexpected byte(s) 00017365"
+    assert cloud_front.describe_error(ConnectionResetError()) == "connection reset"
+    assert cloud_front.describe_error(TimeoutError()) == "timed out"
 
 
 async def test_front_passes_on_the_relay_error_when_the_camera_stays_asleep(

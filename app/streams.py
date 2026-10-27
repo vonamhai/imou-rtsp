@@ -272,7 +272,7 @@ class StreamManager:
         stream = await self.cloud.live_stream(device, channel, sub=sub)
         url = stream.url
         self._cloud_urls[path] = (url, now)
-        _LOGGER.info("Fetched a cloud live URL for %s (%s)", path, stream.key or "url")
+        _LOGGER.info("Fetched a cloud live URL for %s (%s)", path, stream.label)
         return url
 
     async def _build_entries(self) -> dict[tuple[str, str], StreamEntry]:

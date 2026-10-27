@@ -144,9 +144,9 @@
         </label>
         <label>Nguồn lấy hình
           <select name="mode">
-            <option value="lan">LAN – RTSP trực tiếp từ camera (khuyên dùng)</option>
+            <option value="cloud">Link xem trực tiếp từ Imou cloud (mặc định)</option>
+            <option value="lan">LAN – RTSP trực tiếp từ camera (cần Safety Code, cùng mạng với NAS)</option>
             <option value="p2p">P2P qua máy chủ Imou (thử nghiệm)</option>
-            <option value="cloud">Link xem trực tiếp từ Imou cloud (thử nghiệm)</option>
             <option value="custom">URL tùy chỉnh</option>
           </select>
         </label>
@@ -181,7 +181,7 @@
         <label class="check" data-modes="lan p2p cloud"><input type="checkbox" name="sub"> Luồng phụ (SD, thêm “_sub”)</label>
         <label class="check wide"><input type="checkbox" name="on_demand"> Chỉ kết nối tới camera khi có người xem</label>
       </div>
-      <p class="form-hints muted small"></p>
+      <p class="form-hints muted small" data-modes="lan"></p>
       <p class="form-error error" hidden></p>
       <div class="actions">
         <button type="submit">Lưu</button>

@@ -8,7 +8,7 @@
 - Có image dựng sẵn cho amd64 và arm64: `ghcr.io/vonamhai/imou-rtsp:latest`, do GitHub Actions build từ mã nguồn trong repo này. NAS tự tải image về, không cần chép mã nguồn lên NAS.
 
 ```
-Camera Imou ──(LAN RTSP / P2P / cloud)──► MediaMTX trong container ──► rtsp://IP-NAS:8554/<tên>
+Camera Imou ──(cloud / LAN RTSP / P2P)──► MediaMTX trong container ──► rtsp://IP-NAS:8554/<tên>
                                                                     └─► rtsp://IP-NAS:8554/<tên>_sub
 ```
 
@@ -16,16 +16,16 @@ Camera Imou ──(LAN RTSP / P2P / cloud)──► MediaMTX trong container ─
 
 | Chế độ | Mô tả |
 |---|---|
-| **LAN** (mặc định, khuyên dùng) | MediaMTX lấy RTSP trực tiếp từ camera: `rtsp://admin:<mật khẩu>@IP-camera:554/cam/realmonitor?channel=1&subtype=0` (`subtype=1` là luồng phụ). Camera phải cùng mạng với NAS. **Mật khẩu là Safety Code in trên nhãn camera**, hoặc mật khẩu thiết bị nếu bạn đã đổi. IP camera được tự dò trong LAN, hoặc bạn nhập tay. |
+| **Cloud** (mặc định) | Lấy hình qua máy chủ trung chuyển (relay) của Imou, giống khi xem trực tiếp trong app Imou Life. Không cần Safety Code hay IP camera; dùng được cho camera cùng mạng, camera ở mạng khác và **camera 4G/SIM**. Link RTSP của Imou chỉ dùng được một lần, nên mỗi lần kết nối ứng dụng tự xin một link mới. Nếu máy chủ Imou ngắt kết nối ngay, ứng dụng tự thử lại qua TLS rồi xin loại link khác. Một số tài khoản/thiết bị chỉ nhận luồng mã hóa riêng, không dùng được. |
+| **LAN** | MediaMTX lấy RTSP trực tiếp từ camera: `rtsp://admin:<mật khẩu>@IP-camera:554/cam/realmonitor?channel=1&subtype=0` (`subtype=1` là luồng phụ). Nhanh và không phụ thuộc máy chủ Imou, nhưng camera phải cùng mạng với NAS. **Mật khẩu là Safety Code in trên nhãn camera**, hoặc mật khẩu thiết bị nếu bạn đã đổi. IP camera được tự dò trong LAN, hoặc bạn nhập tay. |
 | **P2P** (thử nghiệm) | Kết nối tới camera qua máy chủ P2P của Imou, khi NAS và camera khác mạng. Vẫn cần Safety Code. |
-| **Cloud** (thử nghiệm) | Lấy hình qua máy chủ trung chuyển (relay) của Imou, dùng được cho **camera 4G/SIM** hoặc camera ở mạng khác. Link RTSP của Imou chỉ dùng được một lần và phải đi qua TLS, nên mỗi lần kết nối ứng dụng tự xin một link mới. Nhiều tài khoản/thiết bị chỉ nhận luồng mã hóa riêng, không dùng được. |
 | **URL tùy chỉnh** | Phát lại bất kỳ nguồn `rtsp://`, `rtmp://`, `http(s)://…m3u8`, `srt://`… |
 
 Mặc định chỉ kết nối tới camera **khi có người xem** (tùy chọn "Chỉ kết nối tới camera khi có người xem").
 
 ### Camera 4G / chế độ Cloud
 
-Camera 4G (dùng SIM) không cùng mạng với NAS nên không dùng được chế độ LAN. Hãy chọn chế độ **Cloud** trong **Cấu hình**.
+Camera 4G (dùng SIM) không cùng mạng với NAS nên chỉ dùng được chế độ **Cloud** (chế độ mặc định).
 
 - Nên dùng **luồng phụ** (link `<tên>_sub`, thường là H.264 + AAC, khoảng 100 kbit/s cả hình lẫn tiếng). Luồng chính (thường là H.265) cần nhiều băng thông tải lên. Khi sóng 4G yếu, luồng chính có thể kết nối được nhưng không có hình, hoặc bị giật. Khi đó hãy bỏ chọn **Luồng chính (HD)** trong **Cấu hình**.
 - Nếu camera đang nghỉ, lần mở đầu tiên mất khoảng **20–30 giây** để máy chủ Imou đánh thức camera. Các lần mở sau gần như ngay lập tức.
@@ -48,10 +48,10 @@ Yêu cầu: DSM 7.2 trở lên, gói **Container Manager**, NAS dùng CPU x86-64
    Nên dùng mật khẩu chỉ gồm chữ và số: Docker Compose hiểu ký tự `$` là biến, còn `@`, `:`, `/` làm hỏng link RTSP có kèm mật khẩu.
 4. Bấm **Next** qua các bước (không cần cấu hình Web Station), rồi **Done**. NAS tải image `ghcr.io/vonamhai/imou-rtsp:latest` rồi chạy container. Thư mục `data/` (tài khoản, cấu hình camera) được tạo trong thư mục project.
 5. Mở `http://IP-NAS:8090`, đăng nhập tài khoản Imou Life. Nếu được yêu cầu, làm CAPTCHA (nút *Mở trang CAPTCHA*) rồi nhập mã 6 số gửi qua SMS/email. Có camera ở tài khoản khác? Bấm **Thêm tài khoản** (xem mục [Nhiều tài khoản Imou](#nhiều-tài-khoản-imou)).
-6. Danh sách camera hiện ra. Mỗi kênh tự được bật ở chế độ LAN, với đường dẫn đặt theo tên camera (ví dụ "Cổng trước" → `cong_truoc`). Với từng camera, bấm **Cấu hình**:
+6. Danh sách camera hiện ra. Mỗi kênh tự được bật ở chế độ **Cloud**, với đường dẫn đặt theo tên camera (ví dụ "Cổng trước" → `cong_truoc`), nên thường chỉ cần bấm **Kiểm tra luồng**. Bấm **Cấu hình** nếu muốn bật **Luồng phụ**, hoặc chuyển camera cùng mạng với NAS sang chế độ LAN:
+   - chọn **Nguồn lấy hình: LAN**;
    - nhập **Mật khẩu camera (Safety Code)**;
-   - nhập **IP camera** nếu chưa tự dò được;
-   - bật **Luồng phụ** nếu cần.
+   - nhập **IP camera** nếu chưa tự dò được.
    Bấm **Lưu**, rồi **Kiểm tra luồng**.
 7. Bấm **Sao chép** để lấy link, ví dụ `rtsp://192.168.1.10:8554/cong_truoc`. Nếu đã đặt `RTSP_USERNAME`/`RTSP_PASSWORD`, trình xem sẽ hỏi tài khoản; hoặc bạn tự thêm vào link: `rtsp://xem:matkhau@192.168.1.10:8554/cong_truoc`.
 
@@ -59,7 +59,7 @@ Nếu dùng SSH thay cho giao diện: chép file `docker-compose.yml` (đã sử
 
 ### Cập nhật lên bản mới
 
-Thư mục `data/` (tài khoản, cấu hình camera, link RTSP) được giữ nguyên khi cập nhật.
+Thư mục `data/` (tài khoản, cấu hình camera, link RTSP) được giữ nguyên khi cập nhật. Camera đã cấu hình giữ nguyên chế độ đang dùng; camera mới, hoặc camera bấm **Đặt lại mặc định**, dùng chế độ Cloud.
 
 - Trên giao diện: **Project → imou-rtsp → Action → Stop**, rồi **Action → Clean** (xóa container). Vào **Image**, xóa image `ghcr.io/vonamhai/imou-rtsp`. Quay lại **Project → imou-rtsp → Action → Build**: NAS tải image mới nhất và chạy lại.
 - Qua SSH: `cd /volume1/docker/imou-rtsp && sudo docker compose pull && sudo docker compose up -d`.
@@ -153,6 +153,7 @@ Container dùng `network_mode: host` vì dò camera trong LAN cần UDP broadcas
 | Camera pin (Cell Go, Cell Pro…) | Camera ngủ để tiết kiệm pin nên không có luồng RTSP liên tục. Ứng dụng không hỗ trợ loại này. |
 | Camera 4G: lần đầu mở link lâu hoặc báo lỗi | Camera đang nghỉ, máy chủ Imou cần khoảng 20–30 giây để đánh thức. Hãy chờ hoặc mở lại link. Nếu trình xem có thời gian chờ ngắn (ví dụ ffmpeg với `-timeout`), hãy tăng lên từ 60 giây. |
 | Camera 4G: luồng phụ chạy, luồng chính không có hình (**Kiểm tra luồng** báo "không gửi hình") | Sóng 4G không đủ băng thông tải lên cho luồng chính. Dùng link `_sub` và bỏ chọn **Luồng chính (HD)**, hoặc giảm độ phân giải/bitrate luồng chính trong app Imou. |
+| Chế độ Cloud: **Kiểm tra luồng** báo "Máy chủ cloud của Imou ngắt kết nối ngay" | Máy chủ Imou không phục vụ loại link vừa cấp (từng gặp với camera Wi‑Fi Bullet 2C). Ứng dụng tự thử lại qua TLS, rồi tạm ưu tiên loại link khác trong 10 phút, nên hãy kiểm tra lại. Nếu vẫn lỗi, dòng `Cloud relay for /<tên> …` trong nhật ký cho biết loại link và lý do. Camera cùng mạng với NAS có thể dùng chế độ LAN. |
 | Trình xem không hiện hình, chỉ có tiếng | Nhiều trình duyệt không phát được H.265. Dùng luồng phụ (thường là H.264) hoặc đổi chuẩn nén trong app Imou. |
 | Imou đòi đăng nhập lại | Bấm **Đăng nhập lại** ở dòng tài khoản đó, làm CAPTCHA/OTP nếu có. Mật khẩu đã lưu sẽ được dùng lại. Các tài khoản khác vẫn chạy bình thường. |
 
@@ -161,7 +162,7 @@ Nhật ký có trong mục **Nhật ký hoạt động** trên trang web, hoặc
 ## Lưu ý
 
 - API Imou ở đây là API không chính thức của ứng dụng Imou Life, nên có thể ngừng hoạt động khi Imou thay đổi.
-- Ứng dụng đã có kiểm thử tự động: đăng nhập (giả lập), nhiều tài khoản (giả lập), web, P2P relay, luồng LAN thật đi qua MediaMTX với một camera RTSP giả lập, và chế độ Cloud với một máy chủ relay giả lập. Đã thử với **tài khoản Imou thật và một camera 4G ở chế độ Cloud**: luồng phụ (H.264 + AAC) chạy được; luồng chính (H.265) kết nối được nhưng không có hình vì sóng 4G yếu. Chế độ LAN và P2P chưa được thử với camera thật. Chế độ P2P/Cloud là thử nghiệm.
+- Ứng dụng đã có kiểm thử tự động: đăng nhập (giả lập), nhiều tài khoản (giả lập), web, P2P relay, luồng LAN thật đi qua MediaMTX với một camera RTSP giả lập, và chế độ Cloud với một máy chủ relay giả lập. Đã thử với **tài khoản Imou thật và một camera 4G ở chế độ Cloud**: luồng phụ (H.264 + AAC) chạy được; luồng chính (H.265) kết nối được nhưng không có hình vì sóng 4G yếu. Chế độ LAN và P2P chưa được thử với camera thật. Chế độ P2P là thử nghiệm.
 
 ## Phát triển
 

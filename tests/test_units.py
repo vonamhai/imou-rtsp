@@ -214,7 +214,7 @@ def test_sync_cameras_creates_unique_paths(tmp_path) -> None:
         "NVR:0": "san",
         "NVR:1": "bep",
     }
-    assert all(config.enabled and config.mode == "lan" for config in store.cameras.values())
+    assert all(config.enabled and config.mode == "cloud" for config in store.cameras.values())
     assert cloud.sync_cameras() == 0
     device, channel = cloud.find("NVR:1")
     assert device is not None and channel is not None and channel.name == "Bếp"

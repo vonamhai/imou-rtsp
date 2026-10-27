@@ -8,7 +8,8 @@ import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 from .cameras import SUB_SUFFIX, CameraConfig
@@ -67,15 +68,26 @@ class AccountError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class CloudStream:
-    """One live URL handed out by Imou (``url`` is secret: it is signed)."""
+    """One live URL handed out by Imou (``url`` is secret: it is signed).
+
+    ``mode`` names the Imou API path that produced it; ``reject`` tells that
+    account to try other modes first because this link did not play.
+    """
 
     url: str
     tls: bool = False
     key: str = ""
+    mode: str = ""
+    reject: Callable[[], None] | None = field(default=None, compare=False, repr=False)
 
     @property
     def is_rtsp(self) -> bool:
         return self.url.lower().startswith(("rtsp://", "rtsps://"))
+
+    @property
+    def label(self) -> str:
+        """Log-safe name of the link type, e.g. ``transfer/tlsresource``."""
+        return "/".join(part for part in (self.mode, self.key) if part) or "url"
 
 
 def camera_key(device_id: str, channel_id: str) -> str:
@@ -283,7 +295,20 @@ class CloudAccount:
             raise SourceError("Link cloud dùng giao thức MediaMTX không hỗ trợ.")
         # Imou's *TlsResource URLs say rtsp:// but the relay only speaks TLS.
         tls = key in _TLS_STREAM_KEYS or lowered.startswith("rtsps://")
-        return CloudStream(url=url, tls=tls, key=key)
+        mode = client.live_mode(product_id, device.device_id, channel.channel_id, stream_id)
+        reject = (
+            partial(
+                client.reject_live_mode,
+                product_id,
+                device.device_id,
+                channel.channel_id,
+                stream_id,
+                mode,
+            )
+            if mode
+            else None
+        )
+        return CloudStream(url=url, tls=tls, key=key, mode=mode, reject=reject)
 
 
 class CloudManager:
@@ -535,7 +560,9 @@ class CloudManager:
                         continue
                     path = unique_path(slugify(camera_name(device, channel)), used)
                     used.update({path, f"{path}{SUB_SUFFIX}"})
-                    self.store.cameras[key] = CameraConfig(enabled=True, path=path)
+                    # Cameras linked through an account are usually not on the
+                    # NAS's LAN, so they start in cloud mode.
+                    self.store.cameras[key] = CameraConfig(enabled=True, path=path, mode="cloud")
                     added += 1
         if added:
             self.store.save()

@@ -86,6 +86,8 @@ LATEST_ALARM_REVISION = "193687"
 LEGACY_LATEST_ALARM_REVISION = "3421"
 IOT_CONTROL_TIMEOUT_MS = 10000
 IOT_STREAM_TIMEOUT_MS = 20000
+# How long a live mode whose links did not play is tried last.
+LIVE_MODE_REJECT_TTL = 600.0
 IOT_CONTROL_QOS = 1
 OEM_CONFIG_PREFIX = "CFGENC"
 OEM_CONFIG_KEY = b"1234567890abcdef1234567890abcdef"
@@ -933,6 +935,7 @@ class ImouApiClient:
         ] = {}
         self._live_modes: dict[tuple[str, str, str, str], str] = {}
         self._live_diagnostics: dict[tuple[str, str, str, str], str] = {}
+        self._live_rejected: dict[tuple[str, str, str, str], dict[str, float]] = {}
         self._latest_alarm_status = "not_requested"
         self._iot_control_modes: dict[tuple[str, str, str], str] = {}
         self._family_ids: tuple[str, ...] = ()
@@ -1724,6 +1727,7 @@ class ImouApiClient:
         self._live_cache.clear()
         self._live_modes.clear()
         self._live_diagnostics.clear()
+        self._live_rejected.clear()
         self._latest_alarm_status = "not_requested"
         self._iot_control_modes.clear()
         self._auth_generation += 1
@@ -3105,6 +3109,53 @@ class ImouApiClient:
             "not_requested",
         )
 
+    def live_mode(
+        self,
+        product_id: str,
+        device_id: str,
+        channel_id: str,
+        stream_id: str = "0",
+    ) -> str:
+        """Return the mode that produced the last playable live URL, if any."""
+        cache_key = (product_id, device_id, channel_id, stream_id)
+        if not self._live_diagnostics.get(cache_key, "").startswith("playable:"):
+            return ""
+        return self._live_modes.get(cache_key, "")
+
+    def reject_live_mode(
+        self,
+        product_id: str,
+        device_id: str,
+        channel_id: str,
+        stream_id: str,
+        mode: str,
+        *,
+        ttl: float = LIVE_MODE_REJECT_TTL,
+    ) -> None:
+        """Try ``mode`` last for ``ttl`` seconds: the links it gave did not play.
+
+        The mode is not dropped, so a camera with no other working mode keeps
+        getting it.
+        """
+        if not mode:
+            return
+        cache_key = (product_id, device_id, channel_id, stream_id)
+        self._live_rejected.setdefault(cache_key, {})[mode] = time.monotonic() + ttl
+        if self._live_modes.get(cache_key) == mode:
+            del self._live_modes[cache_key]
+        self._live_cache.pop(cache_key, None)
+
+    def _rejected_live_modes(self, cache_key: tuple[str, str, str, str]) -> set[str]:
+        rejected = self._live_rejected.get(cache_key)
+        if not rejected:
+            return set()
+        now = time.monotonic()
+        for mode in [mode for mode, until in rejected.items() if until <= now]:
+            del rejected[mode]
+        if not rejected:
+            del self._live_rejected[cache_key]
+        return set(rejected)
+
     async def async_get_live_url(
         self,
         product_id: str,
@@ -3156,150 +3207,71 @@ class ImouApiClient:
         last_error: ImouApiError | None = None
         last_result: dict[str, Any] | None = None
 
-        standard_attempts = [
-            (stream_type.casefold(), stream_type)
-            for stream_type in ("RTSP", "HLS", "FLV", "RTMP")
+        # Transfer links (RTSP over TLS) come first: the standard API answers
+        # some models (e.g. Bullet 2C) with relay links that hang up at once.
+        # The mode that last played goes first; modes whose links did not play
+        # (see ``reject_live_mode``) go last for a while.
+        attempts: list[tuple[str, str, Any]] = [
+            ("transfer", "direct", transfer_payload),
+            ("rtsv1", "direct", optimized_payload),
+            *(
+                (f"standard-{stream_type.casefold()}", "standard", stream_type)
+                for stream_type in ("RTSP", "HLS", "FLV", "RTMP")
+            ),
+            ("service-rtsv1", "service", True),
+            ("service-standard", "service", False),
         ]
         preferred_mode = self._live_modes.get(cache_key)
-        if preferred_mode and not preferred_mode.startswith("standard-"):
-            # The standard API already failed for this stream; skip four
-            # round trips that would only fail again.
-            standard_attempts = []
-        elif preferred_mode:
-            standard_attempts.sort(
-                key=lambda attempt: attempt[0] != preferred_mode.removeprefix("standard-")
-            )
-        for mode, stream_type in standard_attempts:
-            payload = {**standard_payload, "streamType": stream_type}
-            try:
-                result = await self.async_request(
-                    "device.info.GetLiveStreamUrl",
-                    "39565",
-                    payload,
-                )
-            except ImouAuthError:
-                raise
-            except ImouApiError as err:
-                if err.code == 429:
-                    raise
-                last_error = err
-                _LOGGER.debug(
-                    "Imou standard live URL unavailable stream_type=%s code=%s",
-                    stream_type,
-                    err.code,
-                )
-                if isinstance(err, ImouConnectionError):
-                    break
-                continue
-            last_result = dict(result)
-            if _contains_playable_live_url(result):
-                selected_mode = f"standard-{mode}"
-                self._live_modes[cache_key] = selected_mode
-                self._live_diagnostics[cache_key] = f"playable:{mode}"
-                self._live_cache[cache_key] = (time.monotonic() + 20, dict(result))
-                return result
-            if _contains_live_url(result):
-                self._live_diagnostics[cache_key] = "private_transport"
-                _LOGGER.debug(
-                    "Imou standard live URL uses private transport stream_type=%s",
-                    stream_type,
-                )
-
-        direct_attempts = [
-            (
-                "transfer",
-                "things.media.GetRealTransferStreamUrl",
-                "197891",
-                transfer_payload,
-            ),
-            (
-                "rtsv1",
-                "things.media.GetRealTransferStreamUrl",
-                "197891",
-                optimized_payload,
-            ),
-        ]
-        preferred_mode = self._live_modes.get(cache_key)
-        if preferred_mode in {"transfer", "rtsv1"}:
-            direct_attempts = [
-                *[
-                    attempt
-                    for attempt in direct_attempts
-                    if attempt[0] == preferred_mode
-                ],
-                *[
-                    attempt
-                    for attempt in direct_attempts
-                    if attempt[0] != preferred_mode
-                ],
-            ]
-        for mode, api_name, revision, payload in direct_attempts:
-            try:
-                result = await self.async_request(api_name, revision, payload)
-            except ImouAuthError:
-                raise
-            except ImouApiError as err:
-                if err.code == 429:
-                    raise
-                last_error = err
-                _LOGGER.debug(
-                    "Imou live URL fallback mode=%s api=%s code=%s",
-                    mode,
-                    api_name,
-                    err.code,
-                )
-                continue
-            last_result = dict(result)
-            if not _contains_playable_live_url(result):
-                if _contains_live_url(result):
-                    _LOGGER.debug(
-                        "Imou live response contains private transport mode=%s",
-                        mode,
-                    )
-                continue
-            self._live_modes[cache_key] = mode
-            self._live_diagnostics[cache_key] = f"playable:{mode}"
-            self._live_cache[cache_key] = (time.monotonic() + 20, dict(result))
-            return result
-
-        service_attempts = (
-            ("service-rtsv1", True, 0),
-            ("service-standard", False, 0),
+        rejected = self._rejected_live_modes(cache_key)
+        attempts.sort(
+            key=lambda attempt: (attempt[0] in rejected, attempt[0] != preferred_mode)
         )
-        for mode, optimized, encrypt_mode in service_attempts:
+        standard_down = False
+        for mode, family, option in attempts:
+            if family == "standard" and standard_down:
+                continue
             try:
-                result = await self.async_invoke_service(
-                    product_id,
-                    device_id,
-                    _STREAM_SERVICE_REF,
-                    self._stream_service_input(
-                        stream_id,
-                        optimized=optimized,
-                        encrypt_mode=encrypt_mode,
-                        extra=extra,
-                    ),
-                    channel_id=channel_id,
-                    timeout_ms=IOT_STREAM_TIMEOUT_MS,
-                )
+                if family == "direct":
+                    result = await self.async_request(
+                        "things.media.GetRealTransferStreamUrl", "197891", option
+                    )
+                elif family == "standard":
+                    result = await self.async_request(
+                        "device.info.GetLiveStreamUrl",
+                        "39565",
+                        {**standard_payload, "streamType": option},
+                    )
+                else:
+                    result = await self.async_invoke_service(
+                        product_id,
+                        device_id,
+                        _STREAM_SERVICE_REF,
+                        self._stream_service_input(
+                            stream_id,
+                            optimized=option,
+                            encrypt_mode=0,
+                            extra=extra,
+                        ),
+                        channel_id=channel_id,
+                        timeout_ms=IOT_STREAM_TIMEOUT_MS,
+                    )
             except ImouAuthError:
                 raise
             except ImouApiError as err:
-                if err.code == 429 or isinstance(err, ImouConnectionError):
+                connection_error = isinstance(err, ImouConnectionError)
+                if err.code == 429 or (family == "service" and connection_error):
                     raise
                 last_error = err
-                _LOGGER.debug(
-                    "Imou live service fallback mode=%s code=%s",
-                    mode,
-                    err.code,
-                )
+                _LOGGER.debug("Imou live URL unavailable mode=%s code=%s", mode, err.code)
+                if family == "standard" and connection_error:
+                    standard_down = True
                 continue
             last_result = dict(result)
             if not _contains_playable_live_url(result):
                 if _contains_live_url(result):
-                    _LOGGER.debug(
-                        "Imou live service returned private transport mode=%s",
-                        mode,
-                    )
+                    if family == "standard":
+                        self._live_diagnostics[cache_key] = "private_transport"
+                    _LOGGER.debug("Imou live URL uses private transport mode=%s", mode)
                 continue
             self._live_modes[cache_key] = mode
             self._live_diagnostics[cache_key] = f"playable:{mode}"
